@@ -1,20 +1,22 @@
-import json, random, time
+import json, random, time, asyncio, threading
 from aiogram import Bot, Dispatcher, executor, types
+from aiohttp import web
 
-TOKEN = "8204880484:AAHZKpUgPBl_hJj_ZQ8HaEczn1dg6njuxZo"
+TOKEN = "8499397849:AAEBo1qeODZsVBwv6PiDNQbqSdXjejzt_d8"
 ADMIN_USERNAME = "winikson"
 DATA_FILE = "data.json"
 
 bot = Bot(token=TOKEN)
 dp = Dispatcher(bot)
 
-# === Функции для работы с базой ===
+# === JSON база ===
 def load_data():
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     except:
-        return {"users": {}, "channels": ["@canal1", "@canal2"], "total_users": 0, "start_date": time.strftime("%Y-%m-%d")}
+        return {"users": {}, "channels": ["@canal1", "@canal2"], "total_users": 0,
+                "start_date": time.strftime("%Y-%m-%d")}
 
 def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
@@ -44,17 +46,13 @@ def admin_menu():
     kb.add("💰 Выдать деньги").add("➕ Добавить канал", "➖ Удалить канал").add("⬅️ В меню")
     return kb
 
-# === Команды ===
+# === /start ===
 @dp.message_handler(commands=["start"])
 async def start(msg: types.Message):
     user_id = str(msg.from_user.id)
-
     if user_id not in data["users"]:
-        data["users"][user_id] = {
-            "name": msg.from_user.username or msg.from_user.first_name,
-            "balance": 1000,
-            "last_bonus": 0
-        }
+        data["users"][user_id] = {"name": msg.from_user.username or msg.from_user.first_name,
+                                  "balance": 1000, "last_bonus": 0}
         data["total_users"] += 1
         save_data(data)
 
@@ -65,86 +63,90 @@ async def start(msg: types.Message):
 
     await msg.answer("🎰 Добро пожаловать в Spin Fortuna!", reply_markup=main_menu())
 
-# === Игра ===
+# === Играть ===
 @dp.message_handler(lambda m: m.text == "🎰 Играть")
 async def play(msg: types.Message):
-    await msg.answer("💰 Введите сумму ставки:")
+    ask = await msg.answer("💰 Введите сумму ставки:")
 
     @dp.message_handler(lambda m: m.text.isdigit())
-    async def bet_handler(bet_msg: types.Message):
-        user_id = str(bet_msg.from_user.id)
-        bet = int(bet_msg.text)
-        user = data["users"][user_id]
+    async def bet(bet_msg: types.Message):
+        try:
+            await bot.delete_message(msg.chat.id, ask.message_id)
+            await bot.delete_message(bet_msg.chat.id, bet_msg.message_id)
+        except: pass
 
+        user = data["users"][str(bet_msg.from_user.id)]
+        bet = int(bet_msg.text)
         if user["balance"] < bet:
-            await bet_msg.answer("❌ Недостаточно средств!", reply_markup=main_menu())
-            return
+            m = await bet_msg.answer("❌ Недостаточно средств!", reply_markup=main_menu())
+            await asyncio.sleep(3); await m.delete(); return
 
         user["balance"] -= bet
-        slots = ["🍒", "🍋", "🍇", "💎", "7️⃣"]
-        result = [random.choice(slots) for _ in range(3)]
-        win = random.random() < 0.6
-
-        if win:
-            prize = bet * 2
-            user["balance"] += prize
-            text = f"{' '.join(result)}\n🎉 Победа! +{prize} Wn"
+        res = [random.choice(["🍒","🍋","🍇","💎","7️⃣"]) for _ in range(3)]
+        if random.random() < 0.6:
+            prize = bet * 2; user["balance"] += prize
+            text = f"{' '.join(res)}\n🎉 Победа! +{prize} Wn"
         else:
-            text = f"{' '.join(result)}\n😢 Проигрыш!"
-
+            text = f"{' '.join(res)}\n😢 Проигрыш!"
         save_data(data)
-        await bet_msg.answer(text, reply_markup=main_menu())
+
+        m = await bet_msg.answer(text, reply_markup=main_menu())
+        await asyncio.sleep(8)
+        try: await bot.delete_message(bet_msg.chat.id, m.message_id)
+        except: pass
 
 # === Профиль ===
 @dp.message_handler(lambda m: m.text == "👤 Профиль")
 async def profile(msg: types.Message):
     u = data["users"][str(msg.from_user.id)]
-    await msg.answer(f"👤 Ник: @{u['name']}\n💰 Баланс: {u['balance']} Wn", reply_markup=main_menu())
+    m = await msg.answer(f"👤 Ник: @{u['name']}\n💰 Баланс: {u['balance']} Wn", reply_markup=main_menu())
+    await asyncio.sleep(8)
+    try:
+        await bot.delete_message(msg.chat.id, m.message_id)
+        await bot.delete_message(msg.chat.id, msg.message_id)
+    except: pass
 
-# === Ежечасовый бонус ===
+# === Бонус ===
 @dp.message_handler(lambda m: m.text == "💸 Ежечасовый бонус")
 async def bonus(msg: types.Message):
-    user_id = str(msg.from_user.id)
-    user = data["users"][user_id]
-    now = time.time()
-
-    if now - user["last_bonus"] >= 3600:
-        user["balance"] += 500
-        user["last_bonus"] = now
-        save_data(data)
-        await msg.answer("✅ Вы получили 500 Wn!", reply_markup=main_menu())
+    u = data["users"][str(msg.from_user.id)]; now = time.time()
+    if now - u["last_bonus"] >= 3600:
+        u["balance"] += 500; u["last_bonus"] = now
+        save_data(data); text = "✅ Вы получили 500 Wn!"
     else:
-        remain = int(3600 - (now - user["last_bonus"])) // 60
-        await msg.answer(f"⏳ Бонус можно получить через {remain} мин.", reply_markup=main_menu())
+        remain = int(3600 - (now - u["last_bonus"])) // 60
+        text = f"⏳ Следующий бонус через {remain} мин."
+    m = await msg.answer(text, reply_markup=main_menu())
+    await asyncio.sleep(8)
+    try:
+        await bot.delete_message(msg.chat.id, m.message_id)
+        await bot.delete_message(msg.chat.id, msg.message_id)
+    except: pass
 
 # === Статистика ===
 @dp.message_handler(lambda m: m.text == "📊 Статистика")
 async def stats(msg: types.Message):
-    await msg.answer(
+    m = await msg.answer(
         f"📅 Дата старта: {data['start_date']}\n"
         f"👑 Владелец: @{ADMIN_USERNAME}\n"
         f"👥 Всего пользователей: {data['total_users']}",
         reply_markup=main_menu()
     )
+    await asyncio.sleep(8)
+    try:
+        await bot.delete_message(msg.chat.id, m.message_id)
+        await bot.delete_message(msg.chat.id, msg.message_id)
+    except: pass
 
 # === Техподдержка ===
 @dp.message_handler(lambda m: m.text == "🛠 Тех. поддержка")
 async def support(msg: types.Message):
-    await msg.answer("✉️ Опиши проблему одним сообщением:")
-
-    @dp.message_handler(lambda m: True)
-    async def send_support(rep: types.Message):
-        if rep.from_user.username == ADMIN_USERNAME:
-            return
-        kb = types.InlineKeyboardMarkup().add(
-            types.InlineKeyboardButton("Ответить", callback_data=f"reply_{rep.from_user.id}")
-        )
-        await msg.answer("✅ Сообщение отправлено админу!")
-        await bot.send_message(
-            msg.from_user.id,
-            f"🆘 Сообщение от @{rep.from_user.username}:\n{rep.text}",
-            reply_markup=kb
-        )
+    ask = await msg.answer("✉️ Опиши проблему одним сообщением:")
+    await asyncio.sleep(10)
+    try:
+        await bot.delete_message(msg.chat.id, ask.message_id)
+        await bot.delete_message(msg.chat.id, msg.message_id)
+    except: pass
 
 # === Админ панель ===
 @dp.message_handler(lambda m: m.from_user.username == ADMIN_USERNAME and m.text.lower() == "/admin")
@@ -153,39 +155,53 @@ async def admin_panel(msg: types.Message):
 
 @dp.message_handler(lambda m: m.from_user.username == ADMIN_USERNAME and m.text == "💰 Выдать деньги")
 async def give_money(msg: types.Message):
-    await msg.answer("💸 Введи ID и сумму через пробел:")
-
+    ask = await msg.answer("💸 Введи ID и сумму через пробел:")
     @dp.message_handler(lambda m: True)
     async def gm(m2: types.Message):
         try:
-            uid, amount = m2.text.split()
-            data["users"][uid]["balance"] += int(amount)
+            await bot.delete_message(m2.chat.id, m2.message_id)
+            await bot.delete_message(msg.chat.id, ask.message_id)
+        except: pass
+        try:
+            uid, amt = m2.text.split()
+            data["users"][uid]["balance"] += int(amt)
             save_data(data)
             await m2.answer("✅ Готово!", reply_markup=admin_menu())
-        except:
-            await m2.answer("Ошибка ввода!")
+        except: await m2.answer("Ошибка!")
 
 @dp.message_handler(lambda m: m.from_user.username == ADMIN_USERNAME and m.text == "➕ Добавить канал")
 async def add_channel(msg: types.Message):
-    await msg.answer("Введите @username канала:")
+    ask = await msg.answer("Введите @username канала:")
     @dp.message_handler(lambda m: m.text.startswith("@"))
     async def add(m2: types.Message):
-        data["channels"].append(m2.text)
-        save_data(data)
-        await m2.answer(f"✅ Канал {m2.text} добавлен.", reply_markup=admin_menu())
+        data["channels"].append(m2.text); save_data(data)
+        await m2.answer(f"✅ Добавлен {m2.text}", reply_markup=admin_menu())
+        try:
+            await bot.delete_message(m2.chat.id, m2.message_id)
+            await bot.delete_message(msg.chat.id, ask.message_id)
+        except: pass
 
 @dp.message_handler(lambda m: m.from_user.username == ADMIN_USERNAME and m.text == "➖ Удалить канал")
 async def del_channel(msg: types.Message):
-    await msg.answer("Введите @username канала для удаления:")
+    ask = await msg.answer("Введите @username канала для удаления:")
     @dp.message_handler(lambda m: m.text.startswith("@"))
     async def delete(m2: types.Message):
         if m2.text in data["channels"]:
-            data["channels"].remove(m2.text)
-            save_data(data)
+            data["channels"].remove(m2.text); save_data(data)
             await m2.answer(f"🗑 Удален {m2.text}", reply_markup=admin_menu())
-        else:
-            await m2.answer("Не найдено!", reply_markup=admin_menu())
+        else: await m2.answer("Не найдено!", reply_markup=admin_menu())
+        try:
+            await bot.delete_message(m2.chat.id, m2.message_id)
+            await bot.delete_message(msg.chat.id, ask.message_id)
+        except: pass
 
+# === Пинг-сервер для Koyeb ===
+async def ping(request): return web.Response(text="OK")
+def run_web():
+    app = web.Application(); app.router.add_get("/ping", ping)
+    web.run_app(app, host="0.0.0.0", port=8000)
+threading.Thread(target=run_web).start()
+
+# === Запуск бота ===
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
-
