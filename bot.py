@@ -1,7 +1,7 @@
 import json, random, time
 from aiogram import Bot, Dispatcher, executor, types
 
-TOKEN = "8499397849:AAEBo1qeODZsVBwv6PiDNQbqSdXjejzt_d8"
+TOKEN = "8204880484:AAHZKpUgPBl_hJj_ZQ8HaEczn1dg6njuxZo"
 ADMIN_USERNAME = "winikson"
 DATA_FILE = "data.json"
 
@@ -188,3 +188,4 @@ async def del_channel(msg: types.Message):
 
 if __name__ == "__main__":
     executor.start_polling(dp, skip_updates=True)
+
